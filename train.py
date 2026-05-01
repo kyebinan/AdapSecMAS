@@ -46,8 +46,8 @@ class CurriculumPhase:
 
 CURRICULUM: list[CurriculumPhase] = [
     CurriculumPhase("jam_only",  episode_start=0,   jam_active=True,  flood_active=False, spoof_active=False),
-    CurriculumPhase("jam_flood", episode_start=50,  jam_active=True,  flood_active=True,  spoof_active=False),
-    CurriculumPhase("all",       episode_start=120, jam_active=True,  flood_active=True,  spoof_active=True),
+    CurriculumPhase("jam_flood", episode_start=80,  jam_active=True,  flood_active=True,  spoof_active=False),
+    CurriculumPhase("all",       episode_start=150, jam_active=True,  flood_active=True,  spoof_active=True),
 ]
 
 

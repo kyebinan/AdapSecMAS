@@ -16,17 +16,17 @@ TX_POWER_DEFAULT: float     = 100.0  # default transmit power (W)
 # ---------------------------------------------------------------------------
 # Jammer
 # ---------------------------------------------------------------------------
-JAMMER_POWER: float   = 130.0  # W — interference power at source
-JAMMER_RADIUS: float  = 430.0  # px — effective jamming radius
+JAMMER_POWER: float   = 100.0  # W — interference power at source
+JAMMER_RADIUS: float  = 300.0  # px — effective jamming radius
 JAMMER_SPEED: float   = 60.0   # px/s
 
 # ---------------------------------------------------------------------------
 # Flooder
 # ---------------------------------------------------------------------------
 FLOOD_RATE_NORMAL: float    = 5.0   # msgs/step — normal agent rate
-FLOOD_RATE_ATTACK: float    = 50.0  # msgs/step — flooder rate
+FLOOD_RATE_ATTACK: float    = 20.0  # msgs/step — flooder rate
 FLOOD_RATE_THRESHOLD: float = 15.0  # detection threshold
-QUEUE_MAX: int              = 100   # max queue length before overflow
+QUEUE_MAX: int              = 500   # max queue length before overflow
 
 # ---------------------------------------------------------------------------
 # Spoofer
@@ -44,10 +44,10 @@ HYSTERESIS_STEPS: int        = 3    # steps below threshold before descending
 # ---------------------------------------------------------------------------
 # Protocols
 # ---------------------------------------------------------------------------
-BAN_VOTE_QUORUM: float  = 0.5   # fraction of votes required for ban
+BAN_VOTE_QUORUM: float  = 0.4   # fraction of votes required for ban
 BAN_DURATION_STEPS: int = 50    # how long a ban lasts
-REVOKE_QUORUM: float    = 0.667 # 2/3 quorum for ID revocation
-FREQ_HOP_QUORUM: float  = 0.5   # fraction of neighbours that must confirm jam
+REVOKE_QUORUM: float    = 0.5 # 2/3 quorum for ID revocation
+FREQ_HOP_QUORUM: float  = 0.3   # fraction of neighbours that must confirm jam
 
 # ---------------------------------------------------------------------------
 # MARL / MAPPO
@@ -77,13 +77,13 @@ ENT_ANNEAL_STEPS: int   = 50_000
 # ---------------------------------------------------------------------------
 
 # M - mission success
-ALPHA_DELIVERY_RATE: float    = 2.0
+ALPHA_DELIVERY_RATE: float    = 5.0
 ALPHA_LINKS_HEALTHY: float    = 0.1
 ALPHA_PROTOCOL_OK: float      = 1.0
 
 # C_sec - security exposure
 BETA_JAM_LOSS: float     = 1.0
-BETA_QUEUE_OVER: float   = 0.8
+BETA_QUEUE_OVER: float   = 0.2
 BETA_SPOOF_ACCEPT: float = 1.5   # highest - identity attack cascades
 BETA_MISMATCH: float     = 2.0   # primary escalation signal
 BETA_PROTO_FAIL: float   = 0.5
