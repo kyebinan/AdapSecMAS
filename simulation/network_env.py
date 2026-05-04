@@ -1,21 +1,5 @@
 # env/network_env.py
-# =============================================================================
-# AdapSecMAS — NetworkEnv
-# Facade pattern: single entry point for the POSG training environment.
-# Hides the complexity of: channel, attackers, protocols, SLM, reward, gossip.
-# The MARL trainer only ever calls reset() and step().
-#
-# POSG: G = <I, S, {A_i}, T, R_team, {O_i}, gamma>
-#   I        = 20 agents
-#   S        = channel state x attack state (latent)
-#   A_i      = {0..6} discrete actions
-#   T        = channel transitions + attacker movement
-#   R_team   = RewardComputer output
-#   O_i      = local noisy observation (7D own + 5D agg_comm)
-#   gamma    = 0.99
-#
-# SRP: orchestrates the simulation step — delegates all logic to sub-modules.
-# =============================================================================
+
 
 from __future__ import annotations
 
@@ -118,6 +102,12 @@ class NetworkEnv:
         # Spoof detection log: {agent_id: [(forged_id, seq_delta), ...]}
         self._spoof_log: dict[int, list] = defaultdict(list)
 
+        # Agents that activated verify-nonce (action=5) this step
+        self._verify_active: set[int] = set()
+
+        # Sliding window of spoof detections per agent — for spoof_rate obs
+        self._spoof_windows: dict[int, deque] = {}
+
         # Shared network state (read/written by protocols)
         self._network_state: dict = {}
 
@@ -161,6 +151,10 @@ class NetworkEnv:
         self._prev_delivery = 0.0
         self._prev_proto_ok = 0.0
         self._spoof_log     = defaultdict(list)
+        self._verify_active = set()
+        self._spoof_windows = {
+            i: deque(maxlen=self._CORRUPT_WINDOW) for i in range(self._n)
+        }
 
         # Initialise agent positions (random scatter in arena)
         self._positions = {
@@ -300,6 +294,12 @@ class NetworkEnv:
                     self._network_state["quarantined_by"].setdefault(i, set())
                     self._network_state["quarantined_by"][i].add(flooder_id)
 
+            # Handle verify-nonce (action=5) — activate strict spoof check
+            if action == 5:
+                self._verify_active.add(i)
+            else:
+                self._verify_active.discard(i)
+
             # Current level from SLM
             levels[i] = self._slms[i].level
 
@@ -372,8 +372,24 @@ class NetworkEnv:
                 lost_jam += 1
                 self._recv_windows[receiver_id].append(0)
             else:
+                # Check if this is a forged message BEFORE validation
+                is_forged = result.payload.get("__forged__", False)
+
+                # If receiver has verify-nonce active, drop forged messages early
+                if is_forged and receiver_id in self._verify_active:
+                    self._metrics.n_spoof_blocked += 1
+                    self._spoof_windows[receiver_id].append(1)
+                    self._recv_windows[receiver_id].append(0)
+                    corrupted += 1
+                    continue
+
                 validation = self._pipeline.handle(result, receiver_id)
                 if validation.valid:
+                    # Forged message passed validation — count as accepted
+                    if is_forged:
+                        self._metrics.n_spoof_accepted += 1
+                        self._metrics.n_spoof_attempts += 1
+                        self._spoof_windows[receiver_id].append(1)
                     delivered += 1
                     self._recv_windows[receiver_id].append(1)
                     self._update_snr_metric(snr_val)
@@ -382,6 +398,10 @@ class NetworkEnv:
                     self._recv_windows[receiver_id].append(0)
                     if validation.handler == "SeqCounterHandler":
                         self._record_spoof(receiver_id, result)
+                    elif is_forged:
+                        # Caught by SignatureHandler
+                        self._metrics.n_spoof_blocked += 1
+                        self._spoof_windows[receiver_id].append(1)
 
         # -- Flood messages --
         flood_msgs = self._flooder.generate_flood_messages(self._dt, self._step_count * self._dt)
@@ -464,7 +484,7 @@ class NetworkEnv:
                 snr_norm     = snr_norm,
                 corrupt_rate = corrupt_rate,
                 flood_rate   = flood_rate,
-                spoof_flag   = 1.0 if self._spoof_log[i] else 0.0,
+                spoof_flag   = self._compute_spoof_rate(i),
                 level_norm   = self._slms[i].level_norm(),
             )
 
@@ -498,7 +518,7 @@ class NetworkEnv:
         jammer_norm  = float(np.clip(jammer_noise / 100.0, 0.0, 1.0))
         corrupt_rate = self._compute_corrupt_rate(agent_id)
         flood_rate   = self._compute_flood_rate(agent_id)
-        spoof_flag   = 1.0 if self._spoof_log[agent_id] else 0.0
+        spoof_flag   = self._compute_spoof_rate(agent_id)
         tx_norm      = self._tx_powers[agent_id] / (TX_POWER_DEFAULT * 16.0)
         level_norm   = self._slms[agent_id].level_norm()
 
@@ -560,6 +580,16 @@ class NetworkEnv:
         raw_rate   = self._network_state["flood_rate_per_sender"].get(flooder_id, 0.0)
         return float(np.clip(raw_rate / FLOOD_RATE_ATTACK, 0.0, 1.0))
 
+    def _compute_spoof_rate(self, agent_id: int) -> float:
+        """
+        Fraction of recent messages that were spoofed — sliding window.
+        Richer signal than binary flag: 0.0 = no spoof, 1.0 = all spoofed.
+        """
+        window = self._spoof_windows.get(agent_id)
+        if not window:
+            return 0.0
+        return float(sum(window) / len(window))
+
     def _update_snr_metric(self, snr_val: float) -> None:
         """Update running SNR average in metrics."""
         n = self._metrics.n_msgs_delivered
@@ -569,17 +599,13 @@ class NetworkEnv:
             self._metrics.avg_snr = (self._metrics.avg_snr * (n - 1) + snr_val) / n
 
     def _record_spoof(self, receiver_id: int, message: Message) -> None:
-        """Record a detected spoof attempt in the log."""
+        """Record a spoof detected by SeqCounterHandler."""
         self._metrics.n_spoof_attempts += 1
+        self._metrics.n_spoof_blocked  += 1
         expected = self._seq_out.get(message.sender_id, 0)
         delta    = abs(message.seq - expected)
         self._spoof_log[receiver_id].append((message.sender_id, delta))
-
-        # Check if it was accepted before detection
-        if message.payload.get("__forged__"):
-            self._metrics.n_spoof_accepted += 1
-        else:
-            self._metrics.n_spoof_blocked += 1
+        self._spoof_windows[receiver_id].append(1)
 
     def _tick_bans(self) -> None:
         """Decrement ban counters — remove expired bans."""
